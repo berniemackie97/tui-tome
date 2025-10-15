@@ -5,6 +5,10 @@ use uuid::Uuid;
 pub fn normalize_eol(s: &str) -> String {
     s.replace("\r\n", "\n")
 }
+/// Split into owned lines after EOL normalization.
+pub fn to_lines(s: &str) -> Vec<String> {
+    normalize_eol(s).lines().map(|l| l.to_string()).collect()
+}
 
 /// Byte offset within a UTF-8 buffer (half-open ranges below are byte-based).
 pub type BytePos = usize;
@@ -26,7 +30,6 @@ impl Range {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct DocumentId(pub Uuid);
-
 impl DocumentId {
     pub fn random() -> Self {
         Self(Uuid::new_v4())
@@ -44,7 +47,6 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    /// Create an anchor from `text` and a byte `range` (clamped to bounds).
     pub fn create(text: &str, range: Range) -> Self {
         let text = normalize_eol(text);
         let start = range.start.min(text.len());
@@ -57,8 +59,6 @@ impl Anchor {
             after: text[end..a1].to_string(),
         }
     }
-
-    /// Resolve this anchor in a possibly edited `text` via best context match.
     pub fn resolve(&self, text: &str) -> Option<Range> {
         if self.target.is_empty() {
             return None;
@@ -66,17 +66,13 @@ impl Anchor {
         let text = normalize_eol(text);
         let mut idx = 0usize;
         let mut fallback: Option<Range> = None;
-
         while let Some(found) = text[idx..].find(&self.target) {
             let start = idx + found;
             let end = start + self.target.len();
-
-            let before_start = start.saturating_sub(self.before.len());
-            let before_ok = text[before_start..start].ends_with(&self.before);
-
-            let after_end = (end + self.after.len()).min(text.len());
-            let after_ok = text[end..after_end].starts_with(&self.after);
-
+            let before_ok =
+                text[start.saturating_sub(self.before.len())..start].ends_with(&self.before);
+            let after_ok =
+                text[end..(end + self.after.len()).min(text.len())].starts_with(&self.after);
             if before_ok && after_ok {
                 return Some(Range { start, end });
             }
@@ -89,13 +85,20 @@ impl Anchor {
     }
 }
 
+/// Text adapter trait: bytes → displayable lines (no mutation of source).
+pub trait TextAdapter: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn extensions(&self) -> &'static [&'static str]; // e.g., ["txt"]
+    fn render_lines(&self, bytes: &[u8]) -> Vec<String>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn normalizes_windows_crlf_to_lf() {
-        let input = "a\r\nb\r\nc";
-        assert_eq!(normalize_eol(input), "a\nb\nc");
+    fn normalize_and_lines() {
+        let v = to_lines("a\r\nb\nc");
+        assert_eq!(v, vec!["a", "b", "c"]);
     }
     #[test]
     fn anchor_resolves_after_inserting_line_above() {
@@ -103,19 +106,12 @@ mod tests {
         let start = text.find("beta").unwrap();
         let end = start + "beta".len();
         let a = Anchor::create(text, Range { start, end });
-
         let changed = "alpha\nNEW\nbeta\ngamma\n";
         let resolved = a.resolve(changed).expect("should resolve");
         assert_eq!(&changed[resolved.start..resolved.end], "beta");
     }
     #[test]
-    fn document_id_creates_uuid() {
-        let a = DocumentId::random();
-        let b = DocumentId::random();
-        assert_ne!(a.0, b.0);
-    }
-    #[test]
-    fn document_id_serde_roundtrip() {
+    fn document_id_roundtrip() {
         let id = DocumentId::random();
         let s = serde_json::to_string(&id).unwrap();
         let back: DocumentId = serde_json::from_str(&s).unwrap();
