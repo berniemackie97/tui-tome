@@ -5,5 +5,9 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1"
+clap = { version = "4", features = ["derive"] }
 crossterm = "0.27"
 ratatui = { version = "0.26", default-features = false, features = ["crossterm"] }
+tome-core = { path = "../core" }
+tome-adapter-txt = { path = "../adapters/txt" }
+tome-adapter-md  = { path = "../adapters/md" }
